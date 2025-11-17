@@ -1,19 +1,36 @@
-// analyze.js
 import { OpenAI } from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// STREAMING CASE PRESENTATION GRADER
-export async function gradeCasePresentation(userInput) {
-  const stream = await client.chat.completions.create({
-    model: "gpt-4o-mini",
-    stream: true,
-    messages: [
-      {
-        role: "system",
-        content: `
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { transcript, emrCase } = req.body;
+
+  if (!transcript || !emrCase) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const userInput = `
+EMR CASE:
+${emrCase}
+
+USER PRESENTATION:
+${transcript}
+  `.trim();
+
+  try {
+    const stream = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      stream: true,
+      messages: [
+        {
+          role: "system",
+          content: `
 You are an AI case-presentation evaluator.
 
 You MUST output results in this exact structure:
@@ -36,7 +53,7 @@ PLAN:
 Do NOT mix content between categories.
 Do NOT combine categories.
 Do NOT output extra commentary.
-Stream each category’s evaluation as you generate it.
+Stream each category's evaluation as you generate it.
 
 Your grading rules:
 1. Score each metric as 0 or 1.
@@ -250,17 +267,27 @@ Relevance + EMR Accuracy
 
 Scoring Rule
 • Each metric = 0 or 1.
-        `
-      },
-      { role: "user", content: userInput }
-    ]
-  });
+          `
+        },
+        { role: "user", content: userInput }
+      ]
+    });
 
-  // STREAM BACK TO FRONTEND IN REAL-TIME
-  for await (const chunk of stream) {
-    if (chunk?.choices?.length > 0) {
-      const delta = chunk.choices[0].delta?.content;
-      if (delta) yield delta;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    for await (const chunk of stream) {
+      if (chunk?.choices?.length > 0) {
+        const delta = chunk.choices[0].delta?.content;
+        if (delta) {
+          res.write(delta);
+        }
+      }
     }
+
+    res.end();
+  } catch (error) {
+    console.error('OpenAI API error:', error);
+    res.status(500).json({ error: 'Failed to analyze presentation' });
   }
 }
